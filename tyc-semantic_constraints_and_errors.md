@@ -14,7 +14,7 @@ The TyC static semantic checker must detect and report the following error types
 2. **UndeclaredIdentifier** - Use of variables or parameters that have not been declared
 3. **UndeclaredFunction** - Use of functions that have not been declared
 4. **UndeclaredStruct** - Use of struct types that have not been declared
-5. **TypeCannotBeInferred** - Variables declared with `auto` whose type cannot be determined
+5. **TypeCannotBeInferred** - `auto` without a fixable type; message is `TypeCannotBeInferred(<ctx>)` where `<ctx>` is one AST node (`str` per `src/utils/nodes.py`)
 6. **TypeMismatchInStatement** - Type incompatibilities in statements (if, while, for, return, assignment)
 7. **TypeMismatchInExpression** - Type incompatibilities in expressions (operators, function calls, member access)
 8. **MustInLoop** - Break/continue statements outside of loop contexts
@@ -279,38 +279,69 @@ struct Address {
 
 ### 5. Type Cannot Be Inferred
 
-**Rule:** Variables declared with `auto` must have their types determinable from their usage.
+**Rule:** Every `auto` binding must obtain a definite type from initialization or from later use.
 
-**Exception:** `TypeCannotBeInferred(<variable>)`
+**Exception:** `TypeCannotBeInferred(<ctx>)` — `<ctx>` is the AST node the checker attaches to the first unresolved case (`__str__` format in `src/utils/nodes.py`). In practice it is the expression or statement under check (e.g. a binary op, an assignment, a block after locals, a `return`), not a bare variable name.
 
-**Type Inference Rules:**
-- **`auto` with initialization:** Type is inferred from the initialization expression
-- **`auto` without initialization:** Type must be inferred from the first usage (assignment, expression, function argument, etc.)
-- If a variable with `auto` is used in a context where its type cannot be determined, this error occurs
+**Inference:** With init → from the initializer; without init → from first use that fixes the type. Otherwise this error.
 
-**Examples:**
+**Reporting:** One semantic error per run; first failure wins. Snippets below are separate illustrations, not one pasteable program.
+
 ```tyc
 // Error: neither auto has a known type — cannot use x + y
 void example() {
     auto x;
     auto y;
-    auto result = x + y;  // TypeCannotBeInferred(x) in reference tests
+    auto result = x + y;  // TypeCannotBeInferred(BinaryOp(Identifier(x), +, Identifier(y)))
 }
 
-// Error: same — cannot use x = y with both types unknown
+// Error: both sides unknown — assignment cannot pick a type
 void test() {
     auto x;
     auto y;
-    x = y;  // TypeCannotBeInferred(y) in reference tests
+    x = y;  // TypeCannotBeInferred(AssignExpr(Identifier(x) = Identifier(y)))
 }
 
-// Error: mutual dependency with no base type
+// Error: mutual dependency — no literal, parameter, or already-typed operand to anchor inference
 void circular() {
     auto a;
     auto b;
-    a = b;  // TypeCannotBeInferred
-    b = a;
+    a = b;  // TypeCannotBeInferred(AssignExpr(Identifier(a) = Identifier(b)))
+    // (A following `b = a` would be the same class of problem; it is not reported in the same run after the error above.)
 }
+
+// Error: both autos unknown — `<` is a BinaryOp; types are required before comparison rules apply
+void compare_autos() {
+    auto x;
+    auto y;
+    int result = x < y;  // TypeCannotBeInferred(BinaryOp(Identifier(x), <, Identifier(y)))
+}
+
+// Error: declaring `int c` does not supply types for `a` and `b`
+void mixed_decl() {
+    auto a;
+    auto b;
+    int c = a * b;  // TypeCannotBeInferred(BinaryOp(Identifier(a), *, Identifier(b)))
+}
+
+// Error: `auto x` is still unknown when typing `x + "hello"` (same message if only `x` is declared)
+void string_mix() {
+    auto x;
+    auto y;  // unused; mirrors reference test_066 — failure is on the next line’s initializer
+    auto result = x + "hello";  // TypeCannotBeInferred(BinaryOp(Identifier(x), +, StringLiteral('hello')))
+}
+
+// Error: auto never used — reported when finishing the block (not at the `VarDecl` line alone)
+void unused_auto() {
+    auto x;
+}  // TypeCannotBeInferred(BlockStmt([VarDecl(auto, x)]))
+
+// Error: return uses an auto that still has no type (inferred-return function; needs `void main()` in full program)
+func() {
+    auto x;
+    return x;  // TypeCannotBeInferred(ReturnStmt(return Identifier(x)))
+}
+void main() {}
 
 // Valid: auto with initialization
 void valid1() {
@@ -323,7 +354,7 @@ void valid1() {
 void valid2() {
     auto a;
     a = 10;        // Valid: type inferred as int from assignment (first usage)
-    
+
     auto b;
     b = 3.14;      // Valid: type inferred as float from assignment (first usage)
 }
@@ -332,28 +363,26 @@ void valid2() {
 void valid3() {
     auto x;
     x = readInt();  // Valid: type inferred as int from function return type (first usage)
-    
+
     auto y;
     int temp = 10;
     y = temp + 5;   // Valid: type inferred as int from expression (first usage)
 }
 
-// Valid: auto variable inferred from expression with known literal
+// Valid: one unknown auto + int literal — inference can fix the auto (contrast with `x + y` error above)
 void valid4() {
     auto value;
-    auto result = value + 5;  // Valid: value inferred as int from + operator with int literal 5
-    // The + operator requires int or float operands, and literal 5 is int,
-    // so the type inference system infers value as int to match the int literal
+    auto result = value + 5;  // Valid: value inferred as int (other operand is IntLiteral 5)
 }
 
-// Valid: auto with initialization from expression
+// Valid: auto with initialization from expression (operands already typed)
 void valid5() {
     int a = 10;
     float b = 3.14;
     auto sum = a + b;  // Valid: type inferred as float from expression
 }
 
-// Valid: auto variable inferred from function parameter type
+// Valid: auto variable inferred from function parameter type (built-in printInt)
 void valid6() {
     auto x;
     printInt(x);  // Valid: type inferred as int from printInt(int) parameter type
@@ -804,7 +833,7 @@ void nestedLoops() {
 When multiple errors are present, report them in the following order:
 
 1. **Declaration errors** (Redeclared, UndeclaredIdentifier, UndeclaredFunction, UndeclaredStruct)
-2. **Type inference errors** (TypeCannotBeInferred)
+2. **Type inference errors** (`TypeCannotBeInferred`; see section 5)
 3. **Type errors** (TypeMismatchInStatement, TypeMismatchInExpression)
 4. **Control flow errors** (MustInLoop)
 
@@ -821,11 +850,11 @@ When multiple errors are present, report them in the following order:
 
 TyC uses complete type inference with the following rules:
 
-1. **Literal types:** Integer → `int`, Float → `float`, String → `string`
-2. **`auto` with initialization:** Type inferred from initialization expression
-3. **`auto` without initialization:** Type inferred from first usage (assignment, expression, function argument)
-4. **Expression types:** Determined by operator rules and operand types
-5. **Function return types:** Can be explicit or inferred from return statements
+1. **Literals:** int / float / string as usual
+2. **`auto`:** From initializer if present; else from first constraining use
+3. **Failure:** Ambiguous or unused `auto` → `TypeCannotBeInferred(<ctx>)` (see section 5)
+4. **Expressions:** Operator/operand rules apply once types are known
+5. **Function returns:** Explicit or inferred from returns
 
 ### Type System Rules
 
