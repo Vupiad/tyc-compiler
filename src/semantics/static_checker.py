@@ -71,15 +71,16 @@ from .static_error import (
     MustInLoop,
 )
 
-class UnknownType(Type):
-    def __str__(self):
-        return "UnknownType()"
-    def accept(self, visitor, o=None):
-        pass
 
-TyCType = Union[IntType, FloatType, StringType, VoidType, StructType, UnknownType]
 
 class StaticChecker(ASTVisitor):
+    class UnknownType(Type):
+        def __str__(self):
+            return "UnknownType()"
+        def accept(self, visitor, o=None):
+            pass
+
+    
     def __init__(self):
         self.global_structs: Dict[str, StructDecl] = {}
         # func env maps name to (return_type, List[param_types])
@@ -135,7 +136,7 @@ class StaticChecker(ASTVisitor):
                 return
 
     def is_same_type(self, t1: Type, t2: Type) -> bool:
-        if isinstance(t1, UnknownType) or isinstance(t2, UnknownType):
+        if isinstance(t1, StaticChecker.UnknownType) or isinstance(t2, StaticChecker.UnknownType):
             return False
         if type(t1) != type(t2):
             return False
@@ -175,6 +176,9 @@ class StaticChecker(ASTVisitor):
             raise Redeclared("Function", node.name)
             
         ret_type = node.return_type
+        if isinstance(ret_type, StructType):
+            if ret_type.struct_name not in self.global_structs:
+                raise UndeclaredStruct(ret_type.struct_name)
         
         param_types = []
         param_names = set()
@@ -188,7 +192,7 @@ class StaticChecker(ASTVisitor):
                     raise UndeclaredStruct(p.param_type.struct_name)
             param_types.append(p.param_type)
             
-        self.global_funcs[node.name] = (ret_type if ret_type else UnknownType(), param_types)
+        self.global_funcs[node.name] = (ret_type if ret_type else StaticChecker.UnknownType(), param_types)
         
         self.current_func_name = node.name
         self.current_func_ret_type = ret_type
@@ -220,7 +224,7 @@ class StaticChecker(ASTVisitor):
             self.visit(stmt, o)
             
         for k, v in self.local_envs[-1].items():
-            if isinstance(v, UnknownType):
+            if isinstance(v, StaticChecker.UnknownType):
                 raise TypeCannotBeInferred(node)
                 
         self.exit_scope()
@@ -235,12 +239,12 @@ class StaticChecker(ASTVisitor):
             init_t = self.visit(node.init_value, node.var_type)
             
             if node.var_type is None:
-                if isinstance(init_t, UnknownType):
+                if isinstance(init_t, StaticChecker.UnknownType):
                     raise TypeCannotBeInferred(node)
                 node.var_type = init_t
                 self.declare_var(node.name, init_t)
             else:
-                if isinstance(init_t, UnknownType):
+                if isinstance(init_t, StaticChecker.UnknownType):
                     self.infer_var_type(node.init_value, node.var_type)
                     init_t = node.var_type
                     
@@ -249,13 +253,13 @@ class StaticChecker(ASTVisitor):
                 self.declare_var(node.name, node.var_type)
         else:
             if node.var_type is None:
-                self.declare_var(node.name, UnknownType())
+                self.declare_var(node.name, StaticChecker.UnknownType())
             else:
                 self.declare_var(node.name, node.var_type)
 
     def visit_if_stmt(self, node: "IfStmt", o: Any = None):
         cond_t = self.visit(node.condition, o)
-        if isinstance(cond_t, UnknownType):
+        if isinstance(cond_t, StaticChecker.UnknownType):
             self.infer_var_type(node.condition, IntType())
             cond_t = IntType()
         if type(cond_t) != IntType:
@@ -267,7 +271,7 @@ class StaticChecker(ASTVisitor):
 
     def visit_while_stmt(self, node: "WhileStmt", o: Any = None):
         cond_t = self.visit(node.condition, o)
-        if isinstance(cond_t, UnknownType):
+        if isinstance(cond_t, StaticChecker.UnknownType):
             self.infer_var_type(node.condition, IntType())
             cond_t = IntType()
         if type(cond_t) != IntType:
@@ -285,7 +289,7 @@ class StaticChecker(ASTVisitor):
             
         if node.condition:
             cond_t = self.visit(node.condition, o)
-            if isinstance(cond_t, UnknownType):
+            if isinstance(cond_t, StaticChecker.UnknownType):
                 self.infer_var_type(node.condition, IntType())
                 cond_t = IntType()
             if type(cond_t) != IntType:
@@ -299,14 +303,14 @@ class StaticChecker(ASTVisitor):
         self.in_loops -= 1
         
         for k, v in self.local_envs[-1].items():
-            if isinstance(v, UnknownType):
+            if isinstance(v, StaticChecker.UnknownType):
                 raise TypeCannotBeInferred(node)
                 
         self.exit_scope()
 
     def visit_switch_stmt(self, node: "SwitchStmt", o: Any = None):
         expr_t = self.visit(node.expr, o)
-        if isinstance(expr_t, UnknownType):
+        if isinstance(expr_t, StaticChecker.UnknownType):
             self.infer_var_type(node.expr, IntType())
             expr_t = IntType()
         if type(expr_t) != IntType:
@@ -321,7 +325,7 @@ class StaticChecker(ASTVisitor):
 
     def visit_case_stmt(self, node: "CaseStmt", o: Any = None):
         case_t = self.visit(node.expr, o)
-        if isinstance(case_t, UnknownType):
+        if isinstance(case_t, StaticChecker.UnknownType):
             self.infer_var_type(node.expr, IntType())
             case_t = IntType()
         if type(case_t) != IntType:
@@ -348,7 +352,7 @@ class StaticChecker(ASTVisitor):
                 self.current_func_ret_type = VoidType()
             else:
                 expr_t = self.visit(node.expr, o)
-                if isinstance(expr_t, UnknownType):
+                if isinstance(expr_t, StaticChecker.UnknownType):
                     raise TypeCannotBeInferred(node)
                 self.current_func_ret_type = expr_t
             self.global_funcs[self.current_func_name] = (self.current_func_ret_type, self.global_funcs[self.current_func_name][1])
@@ -361,7 +365,7 @@ class StaticChecker(ASTVisitor):
                     raise TypeMismatchInStatement(node)
                     
                 expr_t = self.visit(node.expr, self.current_func_ret_type)
-                if isinstance(expr_t, UnknownType):
+                if isinstance(expr_t, StaticChecker.UnknownType):
                     self.infer_var_type(node.expr, self.current_func_ret_type)
                     expr_t = self.current_func_ret_type
                 if not self.is_same_type(expr_t, self.current_func_ret_type):
@@ -382,15 +386,18 @@ class StaticChecker(ASTVisitor):
         left_t = self.visit(node.left, o)
         right_t = self.visit(node.right, o)
 
-        if isinstance(left_t, UnknownType) and not isinstance(right_t, UnknownType):
+        if isinstance(left_t, StaticChecker.UnknownType) and not isinstance(right_t, StaticChecker.UnknownType):
             if type(right_t) in (IntType, FloatType) and node.operator in ('+', '-', '*', '/', '<', '<=', '>', '>=', '==', '!='):
                 self.infer_var_type(node.left, right_t)
                 left_t = right_t
-        elif not isinstance(left_t, UnknownType) and isinstance(right_t, UnknownType):
+        elif not isinstance(left_t, StaticChecker.UnknownType) and isinstance(right_t, StaticChecker.UnknownType):
             if type(left_t) in (IntType, FloatType) and node.operator in ('+', '-', '*', '/', '<', '<=', '>', '>=', '==', '!='):
                 self.infer_var_type(node.right, left_t)
                 right_t = left_t
-        elif isinstance(left_t, UnknownType) and isinstance(right_t, UnknownType):
+        elif isinstance(left_t, StaticChecker.UnknownType) and isinstance(right_t, StaticChecker.UnknownType):
+            raise TypeCannotBeInferred(node)
+
+        if isinstance(left_t, StaticChecker.UnknownType) or isinstance(right_t, StaticChecker.UnknownType):
             raise TypeCannotBeInferred(node)
 
         if node.operator in ('+', '-', '*', '/'):
@@ -416,7 +423,7 @@ class StaticChecker(ASTVisitor):
 
     def visit_prefix_op(self, node: "PrefixOp", o: Any = None):
         operand_t = self.visit(node.operand, o)
-        if isinstance(operand_t, UnknownType):
+        if isinstance(operand_t, StaticChecker.UnknownType):
             if node.operator in ('++', '--', '!'):
                 self.infer_var_type(node.operand, IntType())
                 operand_t = IntType()
@@ -442,7 +449,7 @@ class StaticChecker(ASTVisitor):
 
     def visit_postfix_op(self, node: "PostfixOp", o: Any = None):
         operand_t = self.visit(node.operand, o)
-        if isinstance(operand_t, UnknownType):
+        if isinstance(operand_t, StaticChecker.UnknownType):
             if node.operator in ('++', '--'):
                 self.infer_var_type(node.operand, IntType())
                 operand_t = IntType()
@@ -463,13 +470,13 @@ class StaticChecker(ASTVisitor):
         left_t = self.visit(node.lhs, o)
         right_t = self.visit(node.rhs, left_t)
         
-        if isinstance(left_t, UnknownType) and not isinstance(right_t, UnknownType):
+        if isinstance(left_t, StaticChecker.UnknownType) and not isinstance(right_t, StaticChecker.UnknownType):
             self.infer_var_type(node.lhs, right_t)
             left_t = right_t
-        elif not isinstance(left_t, UnknownType) and isinstance(right_t, UnknownType):
+        elif not isinstance(left_t, StaticChecker.UnknownType) and isinstance(right_t, StaticChecker.UnknownType):
             self.infer_var_type(node.rhs, left_t)
             right_t = left_t
-        elif isinstance(left_t, UnknownType) and isinstance(right_t, UnknownType):
+        elif isinstance(left_t, StaticChecker.UnknownType) and isinstance(right_t, StaticChecker.UnknownType):
             raise TypeCannotBeInferred(node)
             
         if not self.is_same_type(left_t, right_t):
@@ -479,7 +486,7 @@ class StaticChecker(ASTVisitor):
 
     def visit_member_access(self, node: "MemberAccess", o: Any = None):
         obj_t = self.visit(node.obj, o)
-        if isinstance(obj_t, UnknownType):
+        if isinstance(obj_t, StaticChecker.UnknownType):
             raise TypeCannotBeInferred(node)
             
         if not isinstance(obj_t, StructType):
@@ -507,7 +514,7 @@ class StaticChecker(ASTVisitor):
         
         for arg_expr, p_type in zip(node.args, param_types):
             arg_t = self.visit(arg_expr, p_type)
-            if isinstance(arg_t, UnknownType):
+            if isinstance(arg_t, StaticChecker.UnknownType):
                 self.infer_var_type(arg_expr, p_type)
                 arg_t = p_type
             if not self.is_same_type(arg_t, p_type):
@@ -536,7 +543,7 @@ class StaticChecker(ASTVisitor):
             
         for val_expr, member_decl in zip(node.values, struct_decl.members):
             val_t = self.visit(val_expr, member_decl.member_type)
-            if isinstance(val_t, UnknownType):
+            if isinstance(val_t, StaticChecker.UnknownType):
                 self.infer_var_type(val_expr, member_decl.member_type)
                 val_t = member_decl.member_type
             if not self.is_same_type(val_t, member_decl.member_type):

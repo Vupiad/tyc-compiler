@@ -108,24 +108,25 @@ class Emitter:
         Returns:
             Generated JVM instruction string
         """
-        frame.push()
-        if type(in_) is int:
-            i = in_
-            if i >= -1 and i <= 5:
-                return self.jvm.emitICONST(i)
-            elif i >= -128 and i <= 127:
-                return self.jvm.emitBIPUSH(i)
-            elif i >= -32768 and i <= 32767:
-                return self.jvm.emitSIPUSH(i)
-            else:
-                return self.jvm.emitLDC(str(i))
-        elif type(in_) is str:
+        if type(in_) is str:
             if in_ == "true":
-                return self.emit_push_iconst(1, frame)
+                i = 1
             elif in_ == "false":
-                return self.emit_push_iconst(0, frame)
+                i = 0
             else:
-                return self.emit_push_iconst(int(in_), frame)
+                i = int(in_)
+        else:
+            i = in_
+
+        frame.push()
+        if i >= -1 and i <= 5:
+            return self.jvm.emitICONST(i)
+        elif i >= -128 and i <= 127:
+            return self.jvm.emitBIPUSH(i)
+        elif i >= -32768 and i <= 32767:
+            return self.jvm.emitSIPUSH(i)
+        else:
+            return self.jvm.emitLDC(str(i))
 
     def emit_push_fconst(self, in_: str, frame) -> str:
         """
@@ -465,7 +466,7 @@ class Emitter:
         Returns:
             Generated method directive string
         """
-        return self.jvm.emitMETHOD(lexeme, self.get_jvm_type(in_type), True)  # All TyC functions are static
+        return self.jvm.emitMETHOD(lexeme, self.get_jvm_type(in_type), is_static)
 
     def emit_end_method(self, frame) -> str:
         """
@@ -478,7 +479,11 @@ class Emitter:
             Generated end method directive string
         """
         buffer = list()
-        buffer.append(self.jvm.emitLIMITSTACK(frame.get_max_op_stack_size()))
+        # Keep a safety floor because complex struct construction/copy paths
+        # can include stack effects that are conservatively underestimated by
+        # frame simulation in some mixed emission sequences.
+        stack_limit = max(frame.get_max_op_stack_size(), 16)
+        buffer.append(self.jvm.emitLIMITSTACK(stack_limit))
         buffer.append(self.jvm.emitLIMITLOCAL(frame.get_max_index()))
         buffer.append(self.jvm.emitENDMETHOD())
         return "".join(buffer)
@@ -495,7 +500,7 @@ class Emitter:
             Generated JVM instruction string
         """
         frame.pop()
-        return self.jvm.emitIFGT(label)
+        return self.jvm.emitIFNE(label)
 
     def emit_if_false(self, label: int, frame) -> str:
         """
@@ -509,7 +514,7 @@ class Emitter:
             Generated JVM instruction string
         """
         frame.pop()
-        return self.jvm.emitIFLE(label)
+        return self.jvm.emitIFEQ(label)
 
     def emit_dup(self, frame) -> str:
         """
